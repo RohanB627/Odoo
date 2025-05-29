@@ -1,0 +1,68 @@
+import geopy.distance
+
+class SettlementService:
+    def __init__(self, db_manager, odoo_client):
+        self.db_manager = db_manager
+        self.odoo = odoo_client
+    
+    def calculate_courier_settlements(self, date_range):
+        """Calculate weekly courier settlements"""
+        with self.db_manager.get_pg_connection() as conn:
+            query = """
+            SELECT 
+                o.courier_id,
+                cr.courier_full_name,
+                DATE(o.created_at) as delivery_date,
+                EXTRACT(hour FROM o.created_at) as delivery_hour,
+                r.restaurant_location,
+                o.delivery_location,
+                o.order_status,
+                COUNT(*) OVER (
+                    PARTITION BY o.courier_id, DATE(o.created_at), EXTRACT(hour FROM o.created_at)
+                ) as hourly_orders
+            FROM orders o
+            JOIN couriers cr ON o.courier_id = cr.courier_id
+            JOIN restaurants r ON o.restaurant_id = r.restaurant_id
+            WHERE o.order_status = 'Delivered'
+            AND o.created_at BETWEEN %s AND %s
+            ORDER BY o.courier_id, delivery_date, delivery_hour
+            """
+            settlements_df = pd.read_sql(query, conn, params=date_range)
+        
+        # Calculate distance and delivery fees for each order
+        settlements_df['distance_km'] = settlements_df.apply(
+            lambda row: self._calculate_distance(
+                row['restaurant_location'], 
+                row['delivery_location']
+            ), axis=1
+        )
+        settlements_df['delivery_fee'] = settlements_df['distance_km'].apply(
+            self._calculate_delivery_fee
+        )
+        
+        # Apply business rules for commission calculation
+        settlements_df['company_rate'] = settlements_df['hourly_orders'].apply(
+            lambda x: 0.35 if x > 5 else 0.40
+        )
+        settlements_df['courier_rate'] = 1 - settlements_df['company_rate']
+        settlements_df['courier_earnings'] = settlements_df['delivery_fee'] * settlements_df['courier_rate']
+        
+        return settlements_df.groupby(['courier_id', 'courier_full_name'])['courier_earnings'].sum()
+    
+    def _calculate_distance(self, restaurant_location, delivery_location):
+        """Calculate distance between restaurant and delivery location"""
+        try:
+            rest_coords = tuple(map(float, restaurant_location.split(',')))
+            delivery_coords = tuple(map(float, delivery_location.split(',')))
+            return geopy.distance.geodesic(rest_coords, delivery_coords).kilometers
+        except:
+            return 0
+    
+    def _calculate_delivery_fee(self, distance_km):
+        """Calculate delivery fee based on distance"""
+        if distance_km < 5:
+            return 2.0
+        elif distance_km < 7:
+            return 3.0
+        else:
+            return 5.0
