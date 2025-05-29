@@ -1,0 +1,55 @@
+from odoo import models, fields, api
+
+class CourierSettlement(models.Model):
+    _name = 'food.delivery.settlement'
+    _description = 'Courier Weekly Settlement'
+    _inherit = ['mail.thread', 'mail.activity.mixin']
+    
+    name = fields.Char('Settlement Reference', required=True, default='New')
+    courier_id = fields.Many2one('hr.employee', string='Courier', required=True)
+    settlement_period_start = fields.Date('Period Start', required=True)
+    settlement_period_end = fields.Date('Period End', required=True)
+    total_orders = fields.Integer('Total Orders', compute='_compute_settlement_details')
+    total_earnings = fields.Float('Total Earnings', compute='_compute_settlement_details')
+    company_retention = fields.Float('Company Retention', compute='_compute_settlement_details')
+    state = fields.Selection([
+        ('draft', 'Draft'),
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('paid', 'Paid'),
+        ('cancelled', 'Cancelled')
+    ], default='draft', tracking=True)
+    
+    settlement_line_ids = fields.One2many('food.delivery.settlement.line', 'settlement_id', 'Settlement Lines')
+    
+    @api.depends('settlement_line_ids')
+    def _compute_settlement_details(self):
+        for record in self:
+            record.total_orders = len(record.settlement_line_ids)
+            record.total_earnings = sum(line.courier_earnings for line in record.settlement_line_ids)
+            record.company_retention = sum(line.company_share for line in record.settlement_line_ids)
+    
+    def action_submit_for_review(self):
+        self.state = 'pending'
+        # Send notification to finance team
+    
+    def action_approve(self):
+        self.state = 'approved'
+        # Generate payment instruction
+    
+    def action_mark_paid(self):
+        self.state = 'paid'
+        # Update accounting entries
+
+class SettlementLine(models.Model):
+    _name = 'food.delivery.settlement.line'
+    _description = 'Settlement Line Item'
+    
+    settlement_id = fields.Many2one('food.delivery.settlement', 'Settlement', required=True)
+    order_reference = fields.Char('Order Reference', required=True)
+    delivery_fee = fields.Float('Delivery Fee', required=True)
+    distance_km = fields.Float('Distance (km)', required=True)
+    hourly_bonus_applied = fields.Boolean('Hourly Bonus Applied')
+    courier_rate = fields.Float('Courier Rate (%)')
+    courier_earnings = fields.Float('Courier Earnings')
+    company_share = fields.Float('Company Share')
