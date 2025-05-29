@@ -1,0 +1,27 @@
+import psycopg2
+import odoorpc
+from contextlib import contextmanager
+
+class DatabaseManager:
+    def __init__(self):
+        self.pg_config = {
+            'host': 'localhost',
+            'database': 'food_delivery',
+            'user': 'app_user',
+            'password': 'secure_password'
+        }
+        self.odoo_config = {
+            'host': 'localhost',
+            'port': 8069,
+            'database': 'odoo_food_delivery',
+            'username': 'admin',
+            'password': 'admin_password'
+        }
+    
+    @contextmanager
+    def get_pg_connection(self):
+        conn = psycopg2.connect(**self.pg_config)
+        try:
+            yield conn
+        finally:
+            conn.close()
