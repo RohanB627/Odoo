@@ -1,0 +1,63 @@
+import pandas as pd
+from datetime import datetime, timedelta
+import geopy.distance
+
+class DataSyncService:
+    def __init__(self, db_manager, odoo_client):
+        self.db_manager = db_manager
+        self.odoo = odoo_client
+    
+    def sync_orders(self, sync_from=None):
+        """Sync orders from PostgreSQL to Odoo"""
+        if not sync_from:
+            sync_from = datetime.now() - timedelta(hours=1)
+        
+        with self.db_manager.get_pg_connection() as conn:
+            query = """
+            SELECT o.*, c.customer_full_name, c.customer_address,
+                   r.restaurant_name, r.restaurant_location,
+                   cr.courier_full_name
+            FROM orders o
+            JOIN customers c ON o.customer_id = c.customer_id
+            JOIN restaurants r ON o.restaurant_id = r.restaurant_id
+            JOIN couriers cr ON o.courier_id = cr.courier_id
+            WHERE o.updated_at >= %s
+            """
+            orders_df = pd.read_sql(query, conn, params=[sync_from])
+        
+        # Calculate missing business fields
+        for idx, order in orders_df.iterrows():
+            # Calculate distance between restaurant and delivery location
+            distance_km = self._calculate_distance(
+                order['restaurant_location'], 
+                order['delivery_location']
+            )
+            orders_df.at[idx, 'distance_km'] = distance_km
+            orders_df.at[idx, 'delivery_fee'] = self._calculate_delivery_fee(distance_km)
+        
+        for _, order in orders_df.iterrows():
+            self._create_or_update_odoo_order(order)
+    
+    def _calculate_distance(self, restaurant_location, delivery_location):
+        """Calculate distance between restaurant and delivery location"""
+        # Assuming locations are stored as "lat,lng" strings
+        try:
+            rest_coords = tuple(map(float, restaurant_location.split(',')))
+            delivery_coords = tuple(map(float, delivery_location.split(',')))
+            return geopy.distance.geodesic(rest_coords, delivery_coords).kilometers
+        except:
+            return 0  # Default fallback
+    
+    def _calculate_delivery_fee(self, distance_km):
+        """Calculate delivery fee based on distance"""
+        if distance_km < 5:
+            return 2.0
+        elif distance_km < 7:
+            return 3.0
+        else:
+            return 5.0
+    
+    def _create_or_update_odoo_order(self, order_data):
+        """Create or update order in Odoo"""
+        # Implementation for Odoo order creation/update
+        pass
